@@ -1,0 +1,273 @@
+#include <WiFi.h>
+#include <Adafruit_NeoPixel.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+
+// Define constants
+#define LED_PIN 5              // Pin where the LED strip is connected
+#define LED_COUNT 30           // Number of LEDs in the strip
+#define BUILTIN_LED 2          // Built-in LED pin for ESP32
+
+// Define Wi-Fi and MQTT parameters
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
+const char* mqtt_server = "MQTT_SERVER_IP";
+const int mqtt_port = YOUR_MQTT_PORT;
+const char* mqtt_user = "MQTT_USERNAME";
+const char* mqtt_pass = "MQTT_PASSWORD";
+
+// FreeRTOS task handles
+TaskHandle_t mqttTaskHandle;
+TaskHandle_t patternTaskHandle = NULL;  // Task handle for pattern
+
+// Create instances
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Function prototypes
+void setupWiFi();
+void reconnectMQTT();
+void callback(char* topic, byte* payload, unsigned int length);
+void setIndividualLEDs(JsonArray& ledsArray);
+void handleMQTT(void *pvParameters);
+void ledBlink(void *pvParameters);
+void emergencyPattern(void *pvParameters);
+void christmasPattern(void *pvParameters);
+void knightRiderPattern(void *pvParameters);
+void stopPattern();
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(BUILTIN_LED, OUTPUT);
+  
+  strip.begin();
+  strip.show();  // Initialize all pixels to 'off'
+  
+  // Initialize WiFi and MQTT
+  setupWiFi();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+  
+  // Create the MQTT handling task
+  xTaskCreatePinnedToCore(handleMQTT, "MQTT Task", 8192, NULL, 1, &mqttTaskHandle, 1);
+}
+
+void loop() {
+  // The loop remains empty as tasks handle the functionality.
+}
+
+// WiFi connection function
+void setupWiFi() {
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(1000);
+  }
+  
+  Serial.println("\nConnected to WiFi");
+}
+
+// MQTT connection handling
+void reconnectMQTT() {
+  if (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (client.connect("ESP32_Ledstrip", mqtt_user, mqtt_pass)) {
+      Serial.println("connected");
+      client.subscribe("lcabs1993/ESP32/LEDCozinha");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+// MQTT message handling task
+void handleMQTT(void *pvParameters) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      if (!client.connected()) {
+        reconnectMQTT();
+      }
+      client.loop();
+    } else {
+      Serial.println("WiFi disconnected, retrying...");
+      setupWiFi();
+    }
+    vTaskDelay(100 / portTICK_PERIOD_MS);  // Delay to prevent overloading the loop
+  }
+}
+
+// MQTT message callback function
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.printf("Message arrived [%s]: ", topic);
+  
+  payload[length] = '\0';  // Ensure the payload is null-terminated
+  Serial.println((char*)payload);
+  
+  // Blink the built-in LED quickly on message reception
+  xTaskCreate(ledBlink, "LED Blink Task", 1024, NULL, 1, NULL);
+  
+  // Parse the JSON payload
+  StaticJsonDocument<1024> doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  
+  if (error) {
+    Serial.print("deserializeJson() failed: ");
+    Serial.println(error.f_str());
+    return;
+  }
+  
+  // Check if a predefined pattern is specified
+  if (doc.containsKey("pattern")) {
+    const char* pattern = doc["pattern"];
+    stopPattern();  // Stop any current pattern
+
+    if (strcmp(pattern, "emergency") == 0) {
+      xTaskCreate(emergencyPattern, "Emergency Pattern", 2048, NULL, 1, &patternTaskHandle);
+    } else if (strcmp(pattern, "christmas") == 0) {
+      xTaskCreate(christmasPattern, "Christmas Pattern", 2048, NULL, 1, &patternTaskHandle);
+    } else if (strcmp(pattern, "knight_rider") == 0) {
+      // Get RGB values for the chaser color
+      uint8_t r = doc["r"] | 255;
+      uint8_t g = doc["g"] | 0;
+      uint8_t b = doc["b"] | 0;
+
+      // Pass the color values as parameters to the task
+      uint8_t* colorParams = (uint8_t*) pvPortMalloc(3 * sizeof(uint8_t));
+      colorParams[0] = r;
+      colorParams[1] = g;
+      colorParams[2] = b;
+      
+      xTaskCreate(knightRiderPattern, "Knight Rider Pattern", 2048, colorParams, 1, &patternTaskHandle);
+    } else {
+      Serial.println("Unknown pattern.");
+    }
+  }
+  // If no pattern, handle individual LED control
+  else if (doc.containsKey("leds") && doc["leds"].is<JsonArray>()) {
+    JsonArray ledsArray = doc["leds"];
+    setIndividualLEDs(ledsArray);
+  } else {
+    Serial.println("Invalid JSON format.");
+  }
+}
+
+// Stop any running pattern by deleting the pattern task
+void stopPattern() {
+  if (patternTaskHandle != NULL) {
+    vTaskDelete(patternTaskHandle);
+    patternTaskHandle = NULL;
+    strip.clear();  // Turn off all LEDs when stopping a pattern
+    strip.show();
+  }
+}
+
+// Set colors for individual LEDs based on JSON array input
+void setIndividualLEDs(JsonArray& ledsArray) {
+  for (JsonObject led : ledsArray) {
+    int index = led["index"] | -1;
+    int r = led["r"] | 0;
+    int g = led["g"] | 0;
+    int b = led["b"] | 0;
+    int brightness = led["brightness"] | 255;
+
+    if (index >= 0 && index < strip.numPixels()) {
+      strip.setBrightness(brightness);
+      strip.setPixelColor(index, strip.Color(r, g, b));
+      Serial.printf("LED %d set to Color: R=%d G=%d B=%d Brightness=%d\n", index, r, g, b, brightness);
+    } else {
+      Serial.printf("Invalid LED index: %d\n", index);
+    }
+  }
+  strip.show();
+}
+
+// Emergency blinking pattern (all LEDs red with 1-second interval)
+void emergencyPattern(void *pvParameters) {
+  for (;;) {
+    strip.fill(strip.Color(255, 0, 0), 0, LED_COUNT);  // Red color
+    strip.show();
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    strip.clear();
+    strip.show();
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
+
+// Christmas blinking pattern (alternating red/green every 5 LEDs)
+void christmasPattern(void *pvParameters) {
+  for (;;) {
+    for (int i = 0; i < LED_COUNT; i++) {
+      if ((i / 5) % 2 == 0) {
+        strip.setPixelColor(i, strip.Color(0, 255, 0));  // Green
+      } else {
+        strip.setPixelColor(i, strip.Color(255, 0, 0));  // Red
+      }
+    }
+    strip.show();
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+
+    for (int i = 0; i < LED_COUNT; i++) {
+      if ((i / 5) % 2 == 0) {
+        strip.setPixelColor(i, strip.Color(255, 0, 0));  // Red
+      } else {
+        strip.setPixelColor(i, strip.Color(0, 255, 0));  // Green
+      }
+    }
+    strip.show();
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+  }
+}
+
+// Knight Rider pattern (chasing LED with fading tail)
+void knightRiderPattern(void *pvParameters) {
+  uint8_t r = ((uint8_t*)pvParameters)[0];
+  uint8_t g = ((uint8_t*)pvParameters)[1];
+  uint8_t b = ((uint8_t*)pvParameters)[2];
+
+  int pos = 0;
+  int direction = 1;
+
+  for (;;) {
+    // Clear the strip to reset LED states
+    strip.clear();
+
+    // Set the main "chaser" LED color
+    strip.setPixelColor(pos, strip.Color(r, g, b));
+    
+    // Create fading trail effect by dimming previous LEDs
+    for (int i = 1; i <= 5; i++) {
+      int trailPos = pos - i * direction;
+      if (trailPos >= 0 && trailPos < LED_COUNT) {
+        uint8_t dimR = r >> i; // Fade the red component
+        uint8_t dimG = g >> i; // Fade the green component
+        uint8_t dimB = b >> i; // Fade the blue component
+        strip.setPixelColor(trailPos, strip.Color(dimR, dimG, dimB));
+      }
+    }
+
+    // Update the LED strip
+    strip.show();
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+
+    // Move position and reverse direction if at the end
+    pos += direction;
+    if (pos == 0 || pos == LED_COUNT - 1) {
+      direction = -direction;
+    }
+  }
+}
+
+// Blink the built-in LED for indication
+void ledBlink(void *pvParameters) {
+  digitalWrite(BUILTIN_LED, HIGH);
+  vTaskDelay(100 / portTICK_PERIOD_MS);
+  digitalWrite(BUILTIN_LED, LOW);
+  vTaskDelete(NULL);
+}
