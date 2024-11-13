@@ -6,9 +6,9 @@ WiFi Connectivity: Connects to a specified WiFi network.
 MQTT Integration: Subscribes to an MQTT topic to receive LED control commands in JSON format.
 Individual LED Control: Set color and brightness for each LED individually.
 ## Predefined Patterns:
-Emergency: All LEDs blink red with a 1-second interval.
-Christmas: Groups of 5 LEDs alternate between red and green, blinking every 500 ms.
-Knight Rider: A single LED "chaser" moves back and forth with a fading tail effect.
+### Emergency: All LEDs blink red with a 1-second interval.
+### Christmas: Groups of 5 LEDs alternate between red and green, blinking every 500 ms.
+### Knight Rider: A single LED "chaser" moves back and forth with a fading tail effect.
 ## Hardware Requirements
 ESP32 Microcontroller
 Adafruit NeoPixel LED Strip (or similar WS2812B-compatible addressable LED strip)
