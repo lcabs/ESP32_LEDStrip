@@ -1,5 +1,5 @@
 # ESP32 LED Strip Controller with FreeRTOS, MQTT, and Predefined Patterns
-This project enables an ESP32 microcontroller to control an addressable LED strip via MQTT messages, leveraging FreeRTOS for task management. It includes customizable RGB color control for individual LEDs and supports predefined LED patterns: Emergency, Christmas, and Knight Rider. This project uses FreeRTOS for concurrent task execution, enabling seamless WiFi, MQTT, and LED updates.
+This project allows an ESP32 microcontroller to control an addressable LED strip using MQTT messages. With FreeRTOS handling task management, it provides customizable RGB color control for individual LEDs and offers preset patterns such as Emergency, Christmas, and Knight Rider. The use of FreeRTOS ensures smooth operation, enabling simultaneous management of WiFi, MQTT communication, and LED updates.
 
 ## Features
 WiFi Connectivity: Connects to a specified WiFi network.
